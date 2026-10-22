@@ -1,0 +1,28 @@
+services:
+  proxy:
+    image: envoyproxy/envoy:v1.35-latest
+    command: ["-c", "/etc/envoy/config.yaml", "--log-level", "info"]
+    ports:
+      # The proxy listens on port 80 in the container.
+      # Bind only to this computer for local assignment testing.
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./proxy/config.yaml:/etc/envoy/config.yaml:ro
+    depends_on:
+      - go-httpbin
+    networks:
+      - backend
+
+  go-httpbin:
+    image: ghcr.io/mccutchen/go-httpbin:latest
+    # Deliberately do not publish the backend port to the Windows host.
+    expose:
+      - "8080"
+    networks:
+      - backend
+
+networks:
+  backend:
+    # The services can reach each other, but the network has no direct
+    # external connectivity. Only the proxy's localhost port is published.
+    internal: true
