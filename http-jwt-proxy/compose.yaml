@@ -43,12 +43,12 @@ services:
     profiles: ["tools"]
     environment:
       JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required; copy .env.example to .env}"
-      JWT_ISSUER: "${JWT_ISSUER-http-hands-on}"
+      JWT_ISSUER: "${JWT_ISSUER:-http-hands-on}"
       JWT_AUDIENCE: "${JWT_AUDIENCE:-legacy-api}"
     networks:
       - internal
 
 networks:
   edge:
-      internal:
-        internal: true
+  internal:
+    internal: true
