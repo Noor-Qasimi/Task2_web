@@ -156,4 +156,4 @@ This implementation follows the requested network arrangement: the external requ
 
 ## AI assistance disclosure
 
-AI assistance was used to help review the implementation, identify differences between the configuration and the assignment requirements, and improve the README documentation. The model used was **GPT-6**. The model's parameter count is **not publicly disclosed**. The implementation must be reviewed, tested, and understood by the student, who is responsible for explaining the code during the hand-in.
+AI assistance was used to help review the implementation, identify differences between the configuration and the assignment requirements, and improve the README documentation. The model used was **GPT-6**. The model's parameter count is **not publicly disclosed**.
