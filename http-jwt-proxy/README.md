@@ -51,8 +51,7 @@ Run these commands from this project directory.
 3. Create a local self-signed certificate and key:
 
    ```bash
-   mkdir -p certs
-   openssl req -x509 -newkey rsa:2048 -nodes -keyout certs/tls.key -out certs/tls.crt -days 365 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+   bash scripts/generate-cert.sh
    ```
 
    These files are for local testing only. The `certs/` directory is excluded from Git.
