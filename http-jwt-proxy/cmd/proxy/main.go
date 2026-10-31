@@ -30,12 +30,7 @@ func main() {
 	})
 	mux.Handle("/", auth.New([]byte(key), env("JWT_ISSUER", "http-hands-on"), env("JWT_AUDIENCE", "legacy-api")).Middleware(forwarder))
 	secure := &http.Server{Addr: env("HTTPS_ADDR", ":8443"), Handler: mux, ReadHeaderTimeout: 5*time.Second}
-	redirect := &http.Server{Addr: env("HTTP_ADDR", ":8080"), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := r.Host
-		if h, p, e := net.SplitHostPort(host); e == nil && p == "80" { host = h }
-		if host == "" || strings.ContainsAny(host, "\r\n") { http.Error(w, "invalid host", 400); return }
-		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusPermanentRedirect)
-	}), ReadHeaderTimeout: 5*time.Second}
+	redirect := &http.Server{Addr: env("HTTP_ADDR", ":8080"), Handler: http.HandlerFunc(redirectToHTTPS), ReadHeaderTimeout: 5*time.Second}
 	errs := make(chan error, 2)
 	go func(){ errs <- secure.ListenAndServeTLS(cert, priv) }()
 	go func(){ errs <- redirect.ListenAndServe() }()
@@ -43,3 +38,10 @@ func main() {
 	if err := <-errs; err != nil && err != http.ErrServerClosed { log.Fatal(err) }
 }
 func env(k, fallback string) string { if v:=os.Getenv(k); v!="" { return v }; return fallback }
+
+func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
+	host := r.Host
+	if h, p, err := net.SplitHostPort(host); err == nil && p == "80" { host = h }
+	if host == "" || strings.ContainsAny(host, "\r\n") { http.Error(w, "invalid host", http.StatusBadRequest); return }
+	http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusPermanentRedirect)
+}
