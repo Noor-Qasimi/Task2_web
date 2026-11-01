@@ -1,10 +1,24 @@
-# HTTP JWT Reverse Proxy
+# JWT-Authenticated Reverse Proxy for a Legacy HTTP Service
 
-This project places a Go reverse proxy at the entry point to a legacy HTTP service. The proxy receives external requests on host port **80**, validates the request's bearer JWT, and forwards authenticated requests to the legacy service on the private Docker network at **port 8081**.
+## Project overview
 
-The legacy service is not published on a host port. It can be reached only by containers connected to the private `internal` network, including the reverse proxy.
+This project places a Go reverse proxy in front of a legacy HTTP service. The proxy is the only service published to the host. It validates a JSON Web Token (JWT) before forwarding a request to the legacy service, which remains reachable only through Docker's private internal network.
 
-## Architecture
+The implementation uses `ghcr.io/mccutchen/go-httpbin` as the legacy service, as permitted by the assignment.
+
+## 1. How can a service be run only on an internal network?
+
+A service can be kept off the public Internet by placing it on a private network and not publishing its container port to the host.
+
+In this project, Docker Compose provides that isolation:
+
+- The `legacy` service is connected only to the Docker network named `internal`.
+- The `internal` network is configured with `internal: true`, which makes it an isolated network.
+- The legacy service listens on container port `8081` and declares that port with `expose`, but it has no `ports` mapping. Therefore, port `8081` is not published on the host.
+- The `proxy` service is connected to both `edge` and `internal`. It is the only application service that publishes a host port.
+- External clients connect to the proxy on host port `80`. After JWT validation, the proxy forwards accepted requests to `http://legacy:8081` over the internal Docker network.
+
+The request path is:
 
 ```text
 External client
@@ -13,47 +27,85 @@ External client
      v
 Go reverse proxy (container port 8080)
      |
-     | JWT validation
-     | forward only authenticated requests
+     | Validate Authorization: Bearer <JWT>
+     | Reject invalid requests with 401
      v
-Private Docker network (internal)
+Docker internal network
      |
-     | HTTP to legacy:8081
+     | http://legacy:8081
      v
 Legacy go-httpbin service
+(container port 8081; no host port published)
 ```
 
-## Components
+`expose` and `ports` have different purposes. `expose` documents the container port used for communication between connected containers; it does not publish that port on the host. `ports` creates a host-to-container port mapping. The legacy service has no `ports` entry, so clients outside the Docker network cannot access it through `localhost:8081`.
 
-- `cmd/proxy`: HTTP listener, health endpoint, and JWT middleware wiring.
-- `cmd/token`: local utility for creating short-lived test tokens.
-- `internal/auth`: HS256 JWT validation (signature, issuer, audience, expiry, and issued-at).
-- `internal/proxy`: upstream forwarding; removes the Authorization header before forwarding.
-- `compose.yaml`: proxy, legacy service, and optional token utility.
-- `scripts/verify.sh`: integration checks for health, token rejection/acceptance, and backend isolation.
+The proxy is the controlled entry point: it is connected to the public-facing `edge` network and the private `internal` network, while the legacy service is connected only to `internal`.
 
-## Requirements
+## 2. Explain the philosophy of TLS Termination in addition to JWT authentication
 
-- Docker with Docker Compose
-- Go 1.23 or later (only if running tests/building outside Docker)
+TLS Termination is the point at which a reverse proxy accepts an HTTPS connection from a client, performs the TLS handshake, presents the server certificate, and decrypts the incoming traffic. The proxy can then inspect and process the HTTP request before routing it to an internal service.
 
-## Local setup
+TLS Termination and JWT authentication solve different security problems:
 
-Run these commands from this project directory.
+- **TLS protects data in transit.** It encrypts the connection between the client and the TLS endpoint and helps protect the request from being read or modified while travelling across the network.
+- **JWT authenticates the request.** The proxy verifies the token's signature and claims to determine whether the caller presents a valid token. A valid JWT does not itself encrypt HTTP traffic.
 
-1. Create your local environment file:
+Centralizing TLS at a reverse proxy is useful for legacy systems because the backend service does not need to implement HTTPS or manage certificates. The proxy can manage certificates and apply security controls in one place, then forward the request to the backend. If the internal network also requires encryption, the proxy-to-backend connection should use HTTPS or another protected transport.
 
-   **PowerShell**
+**Implementation note:** The assignment specifically requires the proxy to receive external requests on port `80` and forward authenticated requests to the internal service on port `8081`. Therefore, this submitted configuration publishes HTTP on port `80` and does not enable an HTTPS listener or perform TLS Termination at runtime. TLS Termination is explained here as the security concept requested in Question 2; it is not claimed as an implemented feature of this port-80 configuration. In a production deployment, HTTPS should be enabled at the edge, while preserving the internal-network isolation and JWT checks.
+
+## 3. Implement a JWT authentication proxy
+
+### 3.1 Components and network configuration
+
+- **Legacy service:** `ghcr.io/mccutchen/go-httpbin:latest`, configured to listen on port `8081` inside Docker.
+- **Reverse proxy:** a Go HTTP server listening on container port `8080`, mapped to host port `80` by Docker Compose.
+- **Internal network:** the `internal` Docker network is marked `internal: true`. The legacy service is attached only to this network.
+- **Edge network:** the proxy is also attached to `edge`, which provides the network side used by the published host port.
+- **Token utility:** the `token` service creates short-lived JWTs for development and verification. It is a helper tool, not a public token-issuing endpoint.
+
+### 3.2 JWT authentication flow
+
+For requests routed to the legacy service, the proxy expects an HTTP header in this format:
+
+```http
+Authorization: Bearer <token>
+```
+
+The authentication middleware validates the JWT using the HS256 signing algorithm and checks the configured issuer (`iss`), audience (`aud`), and required expiration (`exp`). The issued-at (`iat`) claim is also validated when present. A short clock-skew allowance is configured.
+
+If the token is missing, malformed, expired, incorrectly signed, has the wrong issuer or audience, or uses an unsupported signing algorithm, the proxy returns `401 Unauthorized` and does not forward the request.
+
+After successful validation, the proxy sets `X-Authenticated-Subject` from the verified JWT subject. The reverse proxy removes the `Authorization` header before forwarding the request, so the bearer token is not passed to the legacy service.
+
+The `GET /healthz` endpoint is an unauthenticated liveness check for the proxy process. Requests to the legacy service, such as `/get`, require a valid JWT.
+
+### 3.3 Run the project locally
+
+Requirements: Docker Desktop with Docker Compose and a terminal.
+
+Run these commands from the `http-jwt-proxy` project directory.
+
+1. Create a local environment file.
+
+   **PowerShell:**
    ```powershell
    Copy-Item .env.example .env
    ```
 
-   **Bash**
+   **Git Bash:**
    ```bash
    cp .env.example .env
    ```
 
-2. Edit `.env` and set `JWT_SECRET` to a private random value of at least 32 bytes. Do not commit the real `.env` file.
+2. Open `.env` and replace the `JWT_SECRET` placeholder with a private random secret containing at least 32 bytes. For example, with OpenSSL:
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+   Keep the generated value private. Do not commit `.env` or share the secret.
 
 3. Build and start the services:
 
@@ -62,97 +114,70 @@ Run these commands from this project directory.
    docker compose ps
    ```
 
-   The proxy is published on host port 80. If port 80 is already in use, set another available host port in `.env` using `PROXY_HTTP_PORT`.
+   The proxy should publish host port `80`. The legacy service should not have a host-published port.
 
-4. Check the health endpoint:
+4. Check the proxy health endpoint:
 
    ```bash
    curl -i http://localhost/healthz
    ```
 
-   The expected response is `200 OK`.
+   Expected result: `200 OK`.
 
-## JWT tests
+5. Check that a request without a token is rejected:
 
-Create a short-lived test token with the optional token utility:
+   ```bash
+   curl -i http://localhost/get
+   ```
 
-```bash
-docker compose run --rm token /bin/token -subject student -ttl 5m
-```
+   Expected result: `401 Unauthorized`.
 
-A request without a token should be rejected:
+6. Generate a short-lived test token:
 
-```bash
-curl -i http://localhost/get
-```
+   ```bash
+   docker compose run --rm token -subject student -ttl 5m
+   ```
 
-A request with a valid token should be forwarded to the legacy service:
+   Copy the printed token into the following command in place of `<TOKEN>`:
 
-```bash
-TOKEN="$(docker compose run --rm token /bin/token -subject student -ttl 5m)"
-curl -i -H "Authorization: Bearer $TOKEN" "http://localhost/get?source=verification"
-```
+   ```bash
+   curl -i -H "Authorization: Bearer <TOKEN>" \
+     "http://localhost/get?source=verification"
+   ```
 
-Run the integration checks:
+   Expected result: `200 OK`. The JSON response from go-httpbin should contain the query parameter `source` with the value `verification`.
+
+7. Confirm that the legacy service is not directly published on host port `8081`:
+
+   ```bash
+   curl -i --connect-timeout 3 http://localhost:8081/get
+   ```
+
+   The connection should fail unless another unrelated process on the host is using port `8081`.
+
+### 3.4 Automated checks
+
+With Docker running and the services started, execute:
 
 ```bash
 bash scripts/verify.sh
 ```
 
-Stop the services:
+The script generates valid and expired test tokens, checks the health endpoint, verifies that missing, malformed, and expired tokens are rejected, checks that a valid token reaches go-httpbin, and verifies that the legacy service is not directly published on host port `8081`.
 
-```bash
-docker compose down
-```
-
-## Security notes
-
-- The legacy service has no published host port and is attached only to the Docker network named `internal`, which is configured with `internal: true`.
-- The proxy is the only service that publishes a client-facing port. It connects to both the `edge` and `internal` networks.
-- Requests to legacy-service routes must contain a valid JWT. Missing or invalid tokens are rejected by the proxy.
-- The proxy removes the bearer token from the request before forwarding it to the upstream service.
-- The `/healthz` endpoint is intentionally unauthenticated and does not proxy to the legacy service.
-- This assignment configuration uses HTTP on port 80 to match the specified request flow. HTTP does not encrypt traffic. For a real Internet-facing production deployment, HTTPS should be enabled at the proxy or at a trusted TLS-terminating load balancer in front of it.
-
-## Tests
-
-Unit tests are provided alongside the authentication, proxy, and command packages. Run them with:
+Go unit tests can be run with:
 
 ```bash
 go test ./...
 ```
 
-## Assignment answers
+These commands are provided for verification. The results must be observed in the local environment; this README does not claim that the tests have already passed on every machine.
 
-### 1. How can a service be run only on an internal network?
+### 3.5 Stop the services
 
-A service can be restricted to an internal network by placing it on a private container network and not publishing its container port to the host machine. In this project, Docker Compose creates a network named `internal` with the setting `internal: true`. The legacy `go-httpbin` service is attached only to this network. Its port `8081` is declared with `expose`, not `ports`, so it is available to other containers on the network but is not mapped to a host port.
-
-The reverse proxy is connected to both the external-facing `edge` network and the private `internal` network. It receives client requests through the published host port 80 and communicates with the legacy service using the internal service address `legacy:8081`. A client outside the Docker network cannot connect directly to the legacy service through a published host port. Therefore, external requests must pass through the proxy, where authentication is checked before they reach the legacy application.
-
-### 2. Explain the philosophy of TLS termination in addition to JWT authentication.
-
-TLS termination means that a reverse proxy handles the client's encrypted TLS connection. The client connects to the proxy using HTTPS, and the proxy uses its TLS certificate and private key to establish an encrypted connection. TLS protects data while it travels between the client and the proxy and helps the client verify the server's identity.
-
-After receiving an HTTPS request, the proxy terminates the TLS connection and processes the request. JWT authentication is a separate security step: the proxy checks that the request contains a valid bearer token, verifies its signature, and validates its issuer, audience, and time-related claims. Only after successful validation does the proxy forward the request to the legacy service. These mechanisms have different purposes: TLS protects data in transit and authenticates the server endpoint, while JWT authentication verifies the identity and claims represented by the token. JWT does not replace HTTPS.
-
-For this assignment's specified network flow, the proxy receives external HTTP requests on port 80 and forwards authenticated requests to the internal service on port 8081. Therefore, the current configuration does **not** establish a TLS connection and does not perform TLS termination. TLS termination is explained here as a complementary security concept; enabling it in this deployment would require an HTTPS listener and a certificate, normally on port 443, or a trusted TLS-terminating load balancer in front of the proxy. The assignment's requested port-80 behavior is kept in the implementation.
-
-### 3. Implement a JWT authentication reverse proxy for the legacy service.
-
-This project implements the requested reverse proxy in Go and uses `ghcr.io/mccutchen/go-httpbin` as the legacy HTTP service. Docker Compose publishes the proxy on host port 80 and connects it to the private Docker network. The legacy service listens on port 8081 inside that network and has no host-published port.
-
-The implementation is divided into the following parts:
-
-- **HTTP reverse proxy — `cmd/proxy/main.go`:** starts the HTTP server on the configured address (container port 8080, mapped to host port 80), provides the `/healthz` endpoint, and applies JWT middleware to requests that are forwarded to the legacy service.
-- **JWT authentication — `internal/auth/jwt.go`:** reads a bearer token from the Authorization header and accepts only HS256 tokens. It validates the signature, issuer, audience, expiration, and issued-at claim. Requests with missing or invalid tokens receive an HTTP `401 Unauthorized` response.
-- **Upstream forwarding — `internal/proxy/reverse.go`:** forwards authenticated requests to the configured upstream service, `http://legacy:8081`. It removes the Authorization header before forwarding. If the upstream service is unavailable, it returns an HTTP `502 Bad Gateway` response.
-- **Token utility — `cmd/token/main.go`:** provides a local command-line utility for creating short-lived JWTs for development and verification.
-- **Container configuration — `compose.yaml`:** defines the proxy, the legacy service, and the optional token utility. The proxy joins both the `edge` and `internal` networks, while the legacy service joins only the private `internal` network.
-
-To run the project, create a local `.env` file from `.env.example`, set a strong `JWT_SECRET` of at least 32 bytes, and start the containers with `docker compose up -d --build`. The proxy receives requests on port 80. A request to a legacy route without a valid bearer token should be rejected with HTTP 401. A request with a valid token should pass through the proxy to `go-httpbin`. The integration verification script is `bash scripts/verify.sh`, and the Go unit tests can be run with `go test ./...`.
-
-This implementation follows the requested network arrangement: the external request enters through the proxy on port 80, JWT authentication is checked at the proxy, and only authenticated requests are forwarded to the legacy service on internal port 8081. The legacy service is not directly exposed to external clients.
+```bash
+docker compose down
+```
 
 ## AI assistance disclosure
 

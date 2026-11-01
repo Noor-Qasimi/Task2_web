@@ -1,28 +1,39 @@
 package main
 
-import (
-	"net/http/httptest"
-	"testing"
-)
+import "testing"
 
-func TestEnvUsesFallbackAndConfiguredValue(t *testing.T) {
-	if got:=env("UNSET_PROXY_TEST_VALUE","fallback"); got!="fallback" { t.Fatalf("fallback = %q",got) }
-	t.Setenv("PROXY_TEST_VALUE","configured")
-	if got:=env("PROXY_TEST_VALUE","fallback"); got!="configured" { t.Fatalf("configured = %q",got) }
+func TestLoadConfig(t *testing.T) {
+	t.Setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("UPSTREAM_URL", "http://legacy:8081")
+	t.Setenv("JWT_ISSUER", "test-issuer")
+	t.Setenv("JWT_AUDIENCE", "test-audience")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.upstreamURL.String() != "http://legacy:8081" {
+		t.Errorf("upstream = %s", cfg.upstreamURL)
+	}
+	if cfg.jwtIssuer != "test-issuer" || cfg.jwtAudience != "test-audience" {
+		t.Error("JWT settings were not loaded")
+	}
+	if cfg.listenAddr != ":8080" {
+		t.Errorf("listen address = %q, want :8080", cfg.listenAddr)
+	}
 }
 
-func TestRedirectToHTTPS(t *testing.T) {
-	req:=httptest.NewRequest("GET","http://localhost:80/get?source=test",nil)
-	rec:=httptest.NewRecorder()
-	redirectToHTTPS(rec,req)
-	if rec.Code!=308 { t.Fatalf("status = %d, want 308",rec.Code) }
-	if got,want:=rec.Header().Get("Location"),"https://localhost/get?source=test"; got!=want { t.Fatalf("Location = %q, want %q",got,want) }
+func TestLoadConfigRejectsShortSecret(t *testing.T) {
+	t.Setenv("JWT_SECRET", "short")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("short secret was accepted")
+	}
 }
 
-func TestRedirectRejectsInvalidHost(t *testing.T) {
-	req:=httptest.NewRequest("GET","http://localhost/get",nil)
-	req.Host=""
-	rec:=httptest.NewRecorder()
-	redirectToHTTPS(rec,req)
-	if rec.Code!=400 { t.Fatalf("status = %d, want 400",rec.Code) }
+func TestLoadConfigRejectsInvalidUpstream(t *testing.T) {
+	t.Setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("UPSTREAM_URL", "legacy:8081")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("relative upstream URL was accepted")
+	}
 }

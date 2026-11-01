@@ -16,7 +16,7 @@ services:
     environment:
       LISTEN_ADDR: ":8080"
       UPSTREAM_URL: "http://legacy:8081"
-      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required; copy .env.example to .env}"
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required; copy .env.example to .env and set it}"
       JWT_ISSUER: "${JWT_ISSUER:-http-hands-on}"
       JWT_AUDIENCE: "${JWT_AUDIENCE:-legacy-api}"
     ports:
@@ -36,7 +36,7 @@ services:
     command: ["/bin/token"]
     profiles: ["tools"]
     environment:
-      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required; copy .env.example to .env}"
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required; copy .env.example to .env and set it}"
       JWT_ISSUER: "${JWT_ISSUER:-http-hands-on}"
       JWT_AUDIENCE: "${JWT_AUDIENCE:-legacy-api}"
     networks:
