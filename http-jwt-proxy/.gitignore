@@ -1,5 +1,0 @@
-.env
-/certs/
-/bin/
-/coverage.out
-*.test
